@@ -483,35 +483,36 @@ def main_loop():
     api = initialize_ollama_api()
     while True:
         try:
-            user = input("(execute/ask/cmd/af/ac/q): ").strip().lower()
+            user = input(":command or free-form task ('q' to quit): ").strip()
         except EOFError:
             break
-        if user in {"q", "quit", "exit"}:
+        if not user:
+            continue
+        if user.lower() in {"q", ":q", ":quit", ":exit", "quit", "exit"}:
             break
-        if user in {"af"}:
-            results = add_file_to_context()
-            print("FILES:")
-            for p in results[:20]:
-                print("-", p)
-            continue
-        if user in {"ac"}:
-            chunks = add_code_to_context()
-            print("CHUNKS:")
-            for c in chunks[:5]:
-                print(f"- {c['path']}:{c['start']}-{c['end']}")
-            continue
-        if user in {"cmd", "run"}:
-            command = input("command: ")
-            print(summarize(f"Would run: {command}", 200))
-            continue
-        if user in {"execute", "ask"}:
-            task = input("task/question: ")
-            if not task:
+        if user.startswith(":"):
+            cmd = user[1:].strip().lower()
+            if cmd in {"af"}:
+                results = add_file_to_context()
+                print("FILES:")
+                for p in results[:20]:
+                    print("-", p)
                 continue
-            agent = TaskAgent(task=task, context=None, agent_api=api, outputType="text")
-            print(summarize({"task": agent.task, "outputType": agent.outputType}, 200))
+            if cmd in {"ac"}:
+                chunks = add_code_to_context()
+                print("CHUNKS:")
+                for c in chunks[:5]:
+                    print(f"- {c['path']}:{c['start']}-{c['end']}")
+                continue
+            if cmd in {"cmd", "run"}:
+                command = input("command: ")
+                print(summarize(f"Would run: {command}", 200))
+                continue
+            print("Unknown command")
             continue
-        print("Unknown option")
+        task = user
+        agent = TaskAgent(task=task, context=None, agent_api=api, outputType="text")
+        print(summarize({"task": agent.task, "outputType": agent.outputType}, 200))
 
 
 if __name__ == "__main__":
