@@ -36,7 +36,7 @@ The returned ouput of a task is passed on to the next TaskAgent in line,
 so that tasks may be executed sequentially.
 """
 class TaskAgent:
-    def __init__(self, task: str, context: str=None, agent_api, outputType: str):
+    def __init__(self, task: str, context: str=None, agent_api=None, outputType: str="text"):
         """
         Args:
             task (str, required): detailed description of the task that needs to be done.
@@ -53,18 +53,22 @@ class TaskAgent:
             "If not, split the tasks into smaller, more manageable tasks.\n"
             "Then call the \"new_task\" tool for each sub-task.\n"
         )
+        self.task = task
+        self.context = context
+        self.agent_api = agent_api
+        self.outputType = outputType
 
-        tools:
-            query_code_by_summary
-            query_code_by_text
-            edit_code_agent
-            query_project_context
-            terminal_command
-            web_search
-            create_file
-            create_test
-            validate_command
-            validate_statement
+        # tools:
+        #     query_code_by_summary
+        #     query_code_by_text
+        #     edit_code_agent
+        #     query_project_context
+        #     terminal_command
+        #     web_search
+        #     create_file
+        #     create_test
+        #     validate_command
+        #     validate_statement
 
 #####################
 # TOOLS
@@ -147,12 +151,26 @@ def web_search(searchStr):
     """
     pass
 
+
 def query_project_context(query):
     """
     queries project context vector database
     returns most relevant results
     """
-    pass
+    # Minimal in-memory vector store based on bag-of-words cosine similarity
+    if not isinstance(query, str):
+        raise TypeError("query must be a string")
+    store = _GLOBAL_VECTOR_STORE
+    if store is None or not store["docs"]:
+        return []
+    qvec = _text_vector(query)
+    scored = []
+    for doc in store["docs"]:
+        sim = _cosine_similarity(qvec, doc["vec"]) if doc["vec"] else 0.0
+        scored.append((sim, doc))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [d for _, d in scored[:5]]
+
 
 def validate_command(command):
     """
@@ -203,7 +221,7 @@ def edit_code_chunk(chunk, modification):
 #####################
 
 
-def add_file_to_context:
+def add_file_to_context():
     """
     terminal based file picker with fuzzy matching and real-time keystroke updates.
     If fuzzy match maps to a directory.
@@ -211,7 +229,7 @@ def add_file_to_context:
     pass
 
 
-def add_code_to_context:
+def add_code_to_context():
     """
     same as add_file_to_context
     first calls file picker above, but then breaks each file up into chunks. Uses vim-like bindings (j,k) to page through chunks and enter to select.
@@ -224,7 +242,10 @@ def summarize(obj, max_size):
     summarize this object and return a string no longer than max size.
 
     """
-    pass
+    text = str(obj)
+    if len(text) <= max_size:
+        return text
+    return text[: max_size - 3] + "..."
 
 #####################
 # Context generation
@@ -239,12 +260,14 @@ def initialize_ollama_api():
     """
     pass
 
-def generate_contextual_summary:
+
+def generate_contextual_summary():
     """
     recursively calls a summarizing_agent.
     generates .all-hands/summary
     """
     pass
+
 
 def index_files_and_directories():
     """
@@ -253,13 +276,37 @@ def index_files_and_directories():
     """
     pass
 
-def create_code_chunk_embeddings:
+
+def create_code_chunk_embeddings():
     """
     splits files into chunks
     creates summaries and embeddings for each chunk
     stores summaries and embeddings in vector data base
     """
     pass
+
+# Simple in-memory vector store and utilities
+_GLOBAL_VECTOR_STORE = None
+
+
+def _text_vector(text: str):
+    tokens = [t.lower() for t in text.split() if t.strip()]
+    vec = {}
+    for t in tokens:
+        vec[t] = vec.get(t, 0) + 1
+    return vec
+
+
+def _cosine_similarity(a: dict, b: dict) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(a.get(k, 0) * b.get(k, 0) for k in set(a) | set(b))
+    na = sum(v * v for v in a.values()) ** 0.5
+    nb = sum(v * v for v in b.values()) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
 
 def generate_project_context():
     """
@@ -273,23 +320,58 @@ def generate_project_context():
             checks if a version supports a given command, etc.
         how to build or run a project
         how to test the project
-    An embedding is created for all of these to answer any question about project context that the agent might have, while keeping answers small in size.
+    An embedding is created for all of these to answer any question about
+    project context that the agent might have, while keeping answers small in size.
     Embeddings are stored in a vector database
-    
     """
-    pass
-def main_loop:
+    import os
+    global _GLOBAL_VECTOR_STORE
+
+    files = []
+    for root, dirs, filenames in os.walk(os.getcwd()):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
+        for name in filenames:
+            if name.startswith('.'):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except Exception:
+                content = ""
+            rel = os.path.relpath(path, os.getcwd())
+            files.append({
+                "path": rel,
+                "content": content,
+                "summary": summarize(content, 512)
+            })
+
+    docs = []
+    for f in files:
+        text = f"FILE: {f['path']}\n{f['summary']}"
+        docs.append({
+            "id": f["path"],
+            "text": text,
+            "vec": _text_vector(text)
+        })
+
+    _GLOBAL_VECTOR_STORE = {"docs": docs}
+    print("Project context generated for", len(files), "files")
+    for d in docs[:5]:
+        print("-", d["id"])
+    return _GLOBAL_VECTOR_STORE
+
+
+def main_loop():
+    """
+    Interactive loop outline:
+      - execute_task: TaskAgent(task)
+      - ask_question: TaskAgent(createTask(question))
+      - run_command:
+          af: add_file_to_context()
+          ac: add_code_to_context()
+          q: quit
     """
     generate_project_context()
     initialize_ollama_api()
-    option to:
-        execute_task: TaskAgent(task)
-        ask_question: TaskAgent(createTask(question))
-        run_command:
-            af: add_file_to_context()
-            ac: add_code_to_context()
-            q: quit
-    """
-    pass
-
-
+    # interactive loop would go here
