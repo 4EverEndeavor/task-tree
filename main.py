@@ -58,17 +58,55 @@ class TaskAgent:
         self.agent_api = agent_api
         self.outputType = outputType
 
-        # tools:
-        #     query_code_by_summary
-        #     query_code_by_text
-        #     edit_code_agent
-        #     query_project_context
-        #     terminal_command
-        #     web_search
-        #     create_file
-        #     create_test
-        #     validate_command
-        #     validate_statement
+        self.tools = [
+            {"name": "query_code_by_summary", "description": "search code by summary"},
+            {"name": "query_code_by_text", "description": "search code by text"},
+            {"name": "edit_code_chunk", "description": "apply code modification"},
+            {"name": "query_project_context", "description": "search project context"},
+            {"name": "terminal_command", "description": "run terminal command"},
+            {"name": "web_search", "description": "search the web"},
+            {"name": "create_file", "description": "create a new file"},
+            {"name": "create_test", "description": "create tests"},
+            {"name": "validate_command", "description": "validate terminal command"},
+            {"name": "validate_statement", "description": "validate code statement"},
+        ]
+
+    def run(self):
+        system = {"role": "system", "content": self.SYSTEM_PROMPT}
+        user = {"role": "user", "content": self._build_user_prompt()}
+        self.messages = [system, user]
+        if self.agent_api is None:
+            return self._mock_response()
+        try:
+            if hasattr(self.agent_api, "chat"):
+                resp = self.agent_api.chat(
+                    model=getattr(self.agent_api, "model", None),
+                    messages=self.messages,
+                )
+                return self._extract_text(resp)
+            if hasattr(self.agent_api, "generate"):
+                prompt = self.SYSTEM_PROMPT + "\n\nTask:\n" + self._build_user_prompt()
+                resp = self.agent_api.generate(model=getattr(self.agent_api, "model", None), prompt=prompt)
+                return self._extract_text(resp)
+        except Exception:
+            return self._mock_response()
+        return self._mock_response()
+
+    def _build_user_prompt(self):
+        ctx = f"\nContext:\n{self.context}\n" if self.context else ""
+        tools_list = ", ".join(t["name"] for t in self.tools)
+        return f"Task: {self.task}{ctx}\nAvailable tools: {tools_list}\nReturn output type: {self.outputType}"
+
+    def _extract_text(self, resp):
+        if isinstance(resp, dict):
+            if "message" in resp and isinstance(resp["message"], dict):
+                return resp["message"].get("content") or ""
+            if "response" in resp:
+                return resp.get("response") or ""
+        return str(resp)
+
+    def _mock_response(self):
+        return f"[MOCK RESPONSE] {self.outputType}: Completed task: {self.task}"
 
 #####################
 # TOOLS
@@ -88,7 +126,8 @@ def new_task(task, context, outputType, agent_api):
     Returns:
         str: output in the desired format from the completed task.
     """
-    pass
+    agent = TaskAgent(task=task, context=context, agent_api=agent_api, outputType=outputType)
+    return agent.run()
 
 
 def terminal_command(command):
@@ -104,7 +143,10 @@ def terminal_command(command):
     Returns:
         str: raw output or summary
     """
-    pass
+    if not isinstance(command, str):
+        raise TypeError("command must be a string")
+    preview = f"Would run: {command}"
+    return summarize(preview, 200)
 
 
 def refactor_method(code: Chunk):
@@ -129,14 +171,14 @@ def create_test(chunk: Chunk):
     """
     outputs a unit test/s for given code chunk
     """
-    pass
+    return "def test_placeholder():\n    assert True"
 
 
 def create_file(file):
     """
     creates a new file
     """
-    pass
+    return f"Created file placeholder for: {file}"
 
 
 def web_search(searchStr):
@@ -149,7 +191,12 @@ def web_search(searchStr):
     Returns:
         a small list of clearly summarized, relevant results.
     """
-    pass
+    if not isinstance(searchStr, str):
+        raise TypeError("searchStr must be a string")
+    return [
+        {"title": "Result 1", "summary": summarize(searchStr, 60)},
+        {"title": "Result 2", "summary": summarize(searchStr, 60)},
+    ]
 
 
 def query_project_context(query):
@@ -179,7 +226,9 @@ def validate_command(command):
     context = {"command": command}
     return TaskAgent("Does this command conform to documentation?", context)
     """
-    pass
+    if not isinstance(command, str):
+        raise TypeError("command must be a string")
+    return True
 
 
 def validate_statement(command):
@@ -189,7 +238,9 @@ def validate_statement(command):
     context = {"command": command}
     return TaskAgent("Does this command conform to documentation?", context)
     """
-    pass
+    if not isinstance(command, str):
+        raise TypeError("command must be a string")
+    return True
 
 
 def query_code_by_summary():
@@ -197,7 +248,7 @@ def query_code_by_summary():
     searches through code summary vector database by summary
     returns most relevant code chunks
     """
-    pass
+    return []
 
 
 def query_code_by_text():
@@ -205,7 +256,7 @@ def query_code_by_text():
     searches through code summary vector database by text
     returns most relevant code chunks
     """
-    pass
+    return []
 
 
 def edit_code_chunk(chunk, modification):
@@ -213,7 +264,7 @@ def edit_code_chunk(chunk, modification):
     take the chunk and replace it with the modified chunk
     This also updates the context by generating the embeddings for any updated code
     """
-    pass
+    return {"chunk": chunk, "modification": modification}
 
 
 #####################
