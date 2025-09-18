@@ -480,5 +480,42 @@ def main_loop():
           q: quit
     """
     generate_project_context()
-    initialize_ollama_api()
-    # interactive loop would go here
+    api = initialize_ollama_api()
+    while True:
+        try:
+            user = input("(execute/ask/cmd/af/ac/q): ").strip().lower()
+        except EOFError:
+            break
+        if user in {"q", "quit", "exit"}:
+            break
+        if user in {"af"}:
+            results = add_file_to_context()
+            print("FILES:")
+            for p in results[:20]:
+                print("-", p)
+            continue
+        if user in {"ac"}:
+            chunks = add_code_to_context()
+            print("CHUNKS:")
+            for c in chunks[:5]:
+                print(f"- {c['path']}:{c['start']}-{c['end']}")
+            continue
+        if user in {"cmd", "run"}:
+            command = input("command: ")
+            print(summarize(f"Would run: {command}", 200))
+            continue
+        if user in {"execute", "ask"}:
+            task = input("task/question: ")
+            if not task:
+                continue
+            agent = TaskAgent(task=task, context=None, agent_api=api, outputType="text")
+            print(summarize({"task": agent.task, "outputType": agent.outputType}, 200))
+            continue
+        print("Unknown option")
+
+
+if __name__ == "__main__":
+    try:
+        main_loop()
+    except KeyboardInterrupt:
+        pass
