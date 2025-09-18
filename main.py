@@ -225,8 +225,46 @@ def add_file_to_context():
     """
     terminal based file picker with fuzzy matching and real-time keystroke updates.
     If fuzzy match maps to a directory.
+
+    Minimal non-interactive implementation:
+    - Ensures the in-memory project context exists.
+    - Returns a list of relative file paths in the current working directory
+      filtered by a simple fuzzy substring match using the ADD_FILE_QUERY
+      environment variable. If no query is provided, returns all files.
+
+    Returns:
+        list[str]: matching relative file paths
     """
-    pass
+    import os
+
+    store = _GLOBAL_VECTOR_STORE
+    if store is None:
+        generate_project_context()
+        store = _GLOBAL_VECTOR_STORE
+
+    query = os.environ.get("ADD_FILE_QUERY", "").strip().lower()
+    results = []
+    for root, dirs, filenames in os.walk(os.getcwd()):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
+        for name in filenames:
+            if name.startswith('.'):
+                continue
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, os.getcwd())
+            if not query:
+                results.append(rel)
+            else:
+                hay = rel.lower()
+                i = 0
+                for ch in query:
+                    pos = hay.find(ch, i)
+                    if pos == -1:
+                        i = -1
+                        break
+                    i = pos + 1
+                if i != -1:
+                    results.append(rel)
+    return sorted(results)
 
 
 def add_code_to_context():
