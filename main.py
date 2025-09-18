@@ -231,10 +231,52 @@ def add_file_to_context():
 
 def add_code_to_context():
     """
-    same as add_file_to_context
-    first calls file picker above, but then breaks each file up into chunks. Uses vim-like bindings (j,k) to page through chunks and enter to select.
+    Same as add_file_to_context but returns logical code chunks from selected files.
+    The current minimal implementation reuses the project context and slices file
+    contents into fixed-size line chunks that can be presented or filtered by callers.
+
+    Returns:
+        list[dict]: list of chunk dicts with keys: path, start, end, text
     """
-    pass
+    import os
+
+    store = _GLOBAL_VECTOR_STORE
+    if store is None:
+        generate_project_context()
+        store = _GLOBAL_VECTOR_STORE
+    files = []
+    for root, dirs, filenames in os.walk(os.getcwd()):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
+        for name in filenames:
+            if name.startswith('.'):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except Exception:
+                continue
+            rel = os.path.relpath(path, os.getcwd())
+            files.append((rel, content))
+
+    chunks = []
+    max_lines = 60
+    for rel, content in files:
+        lines = content.splitlines()
+        if not lines:
+            continue
+        start = 0
+        while start < len(lines):
+            end = min(start + max_lines, len(lines))
+            chunk_text = "\n".join(lines[start:end])
+            chunks.append({
+                "path": rel,
+                "start": start + 1,
+                "end": end,
+                "text": chunk_text,
+            })
+            start = end
+    return chunks
 
 
 def summarize(obj, max_size):
