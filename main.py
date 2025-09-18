@@ -255,10 +255,37 @@ def summarize(obj, max_size):
 def initialize_ollama_api():
     """
     The ollama server is started through the python api.
-    First a selection of available models is presented.
+    First a selection of available models is presented to the user.
     The user selects the model from available models.
+    Once selected, the api object is created so that prompts can
+    be sent to the ollama server.
     """
-    pass
+    try:
+        import importlib
+        ollama = importlib.import_module("ollama")
+    except Exception:
+        return None
+
+    try:
+        models_resp = ollama.list()
+        models = []
+        if isinstance(models_resp, dict) and "models" in models_resp:
+            models = [m.get("model") or m.get("name") for m in models_resp["models"] if isinstance(m, dict)]
+        if not models:
+            return None
+        selected = models[0]
+        client = getattr(ollama, "Client", None)
+        if client is not None:
+            try:
+                api = client()
+            except Exception:
+                api = ollama
+        else:
+            api = ollama
+        setattr(api, "model", selected)
+        return api
+    except Exception:
+        return None
 
 
 def generate_contextual_summary():

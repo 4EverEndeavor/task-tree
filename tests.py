@@ -23,6 +23,7 @@ class TestProjectContext(unittest.TestCase):
         finally:
             sys.stdout = old_stdout
         output = buf.getvalue()
+        print("Captured generate_project_context output:\n" + output)
         self.assertIsInstance(store, dict)
         self.assertIn("docs", store)
         self.assertGreater(len(store["docs"]), 0)
@@ -32,6 +33,7 @@ class TestProjectContext(unittest.TestCase):
         results = main.query_project_context("What does main.py contain?")
         self.assertIsInstance(results, list)
         self.assertGreater(len(results), 0)
+        print(f"Query results (top {len(results)}): {results}")
         ids = [r["id"] for r in results]
         self.assertTrue(any("main.py" in i or "tests.py" in i for i in ids))
 
