@@ -391,32 +391,55 @@ def initialize_ollama_api():
     Once selected, the api object is created so that prompts can
     be sent to the ollama server.
     """
+    import os
     try:
         import importlib
         ollama = importlib.import_module("ollama")
-    except Exception:
-        return None
+    except Exception as e:
+        raise RuntimeError(f"Failed to import ollama: {e}")
 
     try:
         models_resp = ollama.list()
-        models = []
-        if isinstance(models_resp, dict) and "models" in models_resp:
-            models = [m.get("model") or m.get("name") for m in models_resp["models"] if isinstance(m, dict)]
-        if not models:
-            return None
-        selected = models[0]
-        client = getattr(ollama, "Client", None)
-        if client is not None:
-            try:
-                api = client()
-            except Exception:
-                api = ollama
+    except Exception as e:
+        raise RuntimeError(f"Failed to list ollama models: {e}")
+
+    if os.environ.get("OLLAMA_DEBUG") == "1":
+        try:
+            print(f"models_resp: {models_resp}")
+            print(f"type(models_resp) = {type(models_resp)}")
+        except Exception:
+            pass
+
+    models = []
+    items = None
+    if isinstance(models_resp, dict) and "models" in models_resp:
+        items = models_resp["models"]
+    else:
+        items = getattr(models_resp, "models", None)
+    if items is None:
+        items = []
+    for m in items:
+        val = None
+        if isinstance(m, dict):
+            val = m.get("model") or m.get("name")
         else:
-            api = ollama
-        setattr(api, "model", selected)
-        return api
-    except Exception:
-        return None
+            val = getattr(m, "model", None) or getattr(m, "name", None)
+        if val:
+            models.append(val)
+    if not models:
+        raise RuntimeError("No ollama models found. Use 'ollama pull <model>' to install one.")
+
+    selected = models[0]
+    client = getattr(ollama, "Client", None)
+    if client is not None:
+        try:
+            api = client()
+        except Exception as e:
+            raise RuntimeError(f"Failed to create ollama client: {e}")
+    else:
+        api = ollama
+    setattr(api, "model", selected)
+    return api
 
 
 def generate_contextual_summary():
