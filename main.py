@@ -75,8 +75,6 @@ class TaskAgent:
         system = {"role": "system", "content": self.SYSTEM_PROMPT}
         user = {"role": "user", "content": self._build_user_prompt()}
         self.messages = [system, user]
-        if self.agent_api is None:
-            return self._mock_response()
         try:
             if hasattr(self.agent_api, "chat"):
                 resp = self.agent_api.chat(
@@ -88,9 +86,8 @@ class TaskAgent:
                 prompt = self.SYSTEM_PROMPT + "\n\nTask:\n" + self._build_user_prompt()
                 resp = self.agent_api.generate(model=getattr(self.agent_api, "model", None), prompt=prompt)
                 return self._extract_text(resp)
-        except Exception:
-            return self._mock_response()
-        return self._mock_response()
+        except Exception as e:
+            print(e)
 
     def _build_user_prompt(self):
         ctx = f"\nContext:\n{self.context}\n" if self.context else ""
@@ -105,8 +102,6 @@ class TaskAgent:
                 return resp.get("response") or ""
         return str(resp)
 
-    def _mock_response(self):
-        return f"[MOCK RESPONSE] {self.outputType}: Completed task: {self.task}"
 
 #####################
 # TOOLS
@@ -412,7 +407,6 @@ def initialize_ollama_api():
 
     models = []
     items = None
-    breakpoint()
     items = models_resp["models"]
     if items is None:
         items = []
@@ -583,8 +577,10 @@ def main_loop():
             print("Unknown command")
             continue
         task = user
+        breakpoint()
         agent = TaskAgent(task=task, context=None, agent_api=api, outputType="text")
-        print(summarize({"task": agent.task, "outputType": agent.outputType}, 200))
+        agent_response = agent.run()
+        print(f"ollama: {agent_response}")
 
 
 if __name__ == "__main__":
