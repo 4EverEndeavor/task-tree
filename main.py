@@ -412,10 +412,8 @@ def initialize_ollama_api():
 
     models = []
     items = None
-    if isinstance(models_resp, dict) and "models" in models_resp:
-        items = models_resp["models"]
-    else:
-        items = getattr(models_resp, "models", None)
+    breakpoint()
+    items = models_resp["models"]
     if items is None:
         items = []
     for m in items:
