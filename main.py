@@ -179,7 +179,9 @@ class TaskAgent:
                         tool_outputs = []
                         for tool_call in tool_calls:
                             tool_name = tool_call["function"]["name"]
-                            tool_args = json.loads(tool_call["function"]["arguments"])
+                            tool_args = tool_call["function"]["arguments"]
+                            if isinstance(tool_args, str):
+                                tool_args = json.loads(tool_args)
                             tool_output = self._call_tool(tool_name, tool_args)
                             if tool_name == 'return':
                                 return tool_output
