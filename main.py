@@ -6,6 +6,8 @@ Integrates with ollama local agent using ollama api.
 Large tasks are broken into smaller tasks and passed to more TaskAgents via tools.
 When a task is passed from one agent to anther, the context is kept below a maximum size.
 """
+import json
+import os
 
 MAX_CONTEXT_SIZE_TOKENS = 4096
 
@@ -35,10 +37,108 @@ Each task agent splits tasks until the sub tasks can be handled by a single tool
 The returned ouput of a task is passed on to the next TaskAgent in line,
 so that tasks may be executed sequentially.
 """
+
+
+def get_tools():
+    return [
+        {
+            "name": "new_task",
+            "description": "Creates a new TaskAgent to handle a sub-task. Use this to break down a large task into smaller, more manageable pieces. When using this tool, provide a detailed description of the task, any relevant context, and the expected output type.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Detailed description of the task that needs to be done."},
+                    "context": {"type": "string", "description": "Concise summary of the previous task output."},
+                    "outputType": {"type": "string", "description": "Description of what this task agent should return in the 'return' tool"},
+                },
+                "required": ["task", "outputType"],
+            },
+        },
+        {
+            "name": "terminal_command",
+            "description": "Runs a command in the terminal. Use this for tasks like running scripts, managing files, or using command-line tools. The command should be a single, valid shell command.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "The command to be executed."},
+                },
+                "required": ["command"],
+            },
+        },
+        {
+            "name": "web_search",
+            "description": "Performs a web search using the DuckDuckGo API. Use this to find information on the web, such as documentation, articles, or examples.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query."},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "create_file",
+            "description": "Creates a new file with the given content. Use this to create new source files, documentation, or any other text-based file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "The path to the file to be created."},
+                    "content": {"type": "string", "description": "The content to be written to the file."},
+                },
+                "required": ["file_path", "content"],
+            },
+        },
+        {
+            "name": "create_test",
+            "description": "Creates a unit test for a given code chunk. The test should be a valid unit test for the programming language of the code chunk.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chunk": {"type": "string", "description": "The code chunk to be tested."},
+                },
+                "required": ["chunk"],
+            },
+        },
+        {
+            "name": "query_project_context",
+            "description": "Queries the project context vector database to find relevant information about the project. Use this to get information about the project's structure, dependencies, or other relevant details.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The query to search for in the project context."},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "edit_code_chunk",
+            "description": "Replaces a code chunk with a modified version. Use this to refactor code, fix bugs, or add new features.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chunk": {"type": "string", "description": "The original code chunk to be replaced."},
+                    "modification": {"type": "string", "description": "The modified code chunk."},
+                },
+                "required": ["chunk", "modification"],
+            },
+        },
+        {
+            "name": "return",
+            "description": "Returns the final output of the task. Use this when the task is complete and you have the final result.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output": {"type": "string", "description": "The final output of the task."},
+                },
+                "required": ["output"],
+            },
+        },
+    ]
+
+
 class TaskAgent:
-    def __init__(self, task: str, context: str=None, agent_api=None, outputType: str="text"):
-        """
-        Args:
+    def __init__(self, task: str, context: str = None, agent_api=None, outputType: str = "text"):
+        """Args:
             task (str, required): detailed description of the task that needs to be done.
             context (str, optional): concise summary of the previous task output.
             agent_api (obj, required): interface for llm agent
@@ -48,51 +148,66 @@ class TaskAgent:
         self.SYSTEM_PROMPT = (
             "You are a task handling code agent.\n"
             "You will be given a task with context and a set of tools.\n"
-            "First, analyze the task and see if it can be completed with a single tool.\n"
-            "If so, call the tool and return the output by calling the 'return' tool.\n"
-            "If not, split the tasks into smaller, more manageable tasks.\n"
-            "Then call the \"new_task\" tool for each sub-task.\n"
+            "Your goal is to complete the task by using the available tools.\n"
+            "First, analyze the task and see if it can be completed with a single tool. If so, call the tool with the correct arguments.\n"
+            "If the task is complex, break it down into smaller, more manageable sub-tasks. Then, for each sub-task, call the \"new_task\" tool to create a new TaskAgent to handle it.\n"
+            "When a sub-task is complete, you will receive the output. Use this output as context for the next sub-task.\n"
+            "Once all sub-tasks are complete, you will have the final result. Call the \"return\" tool to return the final output.\n"
+            "Always use the tools provided. Do not attempt to answer the prompt directly.\n"
+            "When you call a tool, the output will be provided to you in the next turn. You can then use this output to continue with the task.\n"
         )
         self.task = task
         self.context = context
         self.agent_api = agent_api
         self.outputType = outputType
-
-        self.tools = [
-            {"name": "query_code_by_summary", "description": "search code by summary"},
-            {"name": "query_code_by_text", "description": "search code by text"},
-            {"name": "edit_code_chunk", "description": "apply code modification"},
-            {"name": "query_project_context", "description": "search project context"},
-            {"name": "terminal_command", "description": "run terminal command"},
-            {"name": "web_search", "description": "search the web"},
-            {"name": "create_file", "description": "create a new file"},
-            {"name": "create_test", "description": "create tests"},
-            {"name": "validate_command", "description": "validate terminal command"},
-            {"name": "validate_statement", "description": "validate code statement"},
-        ]
+        self.tools = get_tools()
 
     def run(self):
         system = {"role": "system", "content": self.SYSTEM_PROMPT}
         user = {"role": "user", "content": self._build_user_prompt()}
         self.messages = [system, user]
-        try:
-            if hasattr(self.agent_api, "chat"):
-                resp = self.agent_api.chat(
-                    model=getattr(self.agent_api, "model", None),
-                    messages=self.messages,
-                )
-                return self._extract_text(resp)
-            if hasattr(self.agent_api, "generate"):
-                prompt = self.SYSTEM_PROMPT + "\n\nTask:\n" + self._build_user_prompt()
-                resp = self.agent_api.generate(model=getattr(self.agent_api, "model", None), prompt=prompt)
-                return self._extract_text(resp)
-        except Exception as e:
-            print(e)
+        while True:
+            try:
+                if hasattr(self.agent_api, "chat"):
+                    resp = self.agent_api.chat(
+                        model=getattr(self.agent_api, "model", None),
+                        messages=self.messages,
+                        tools=self.tools,
+                    )
+                    if "message" in resp and "tool_calls" in resp["message"] and resp["message"]["tool_calls"]:
+                        tool_calls = resp["message"]["tool_calls"]
+                        tool_outputs = []
+                        for tool_call in tool_calls:
+                            tool_name = tool_call["function"]["name"]
+                            tool_args = json.loads(tool_call["function"]["arguments"])
+                            tool_output = self._call_tool(tool_name, tool_args)
+                            if tool_name == 'return':
+                                return tool_output
+                            tool_outputs.append({"tool_call_id": tool_call["id"], "output": tool_output})
+                        self.messages.append(resp["message"])
+                        self.messages.append({"role": "tool", "content": json.dumps(tool_outputs)})
+                    elif "message" in resp:
+                        return resp["message"].get("content") or ""
+                    else:
+                        return str(resp)
+                elif hasattr(self.agent_api, "generate"):
+                    prompt = self._build_prompt_for_generate()
+                    resp = self.agent_api.generate(model=getattr(self.agent_api, "model", None), prompt=prompt)
+                    return self._extract_text(resp)
+            except Exception as e:
+                print(e)
+                return None
 
     def _build_user_prompt(self):
         ctx = f"\nContext:\n{self.context}\n" if self.context else ""
-        tools_list = ", ".join(t["name"] for t in self.tools)
-        return f"Task: {self.task}{ctx}\nAvailable tools: {tools_list}\nReturn output type: {self.outputType}"
+        return f"Task: {self.task}{ctx}\nReturn output type: {self.outputType}"
+
+    def _build_prompt_for_generate(self):
+        prompt = self.SYSTEM_PROMPT + "\n\n"
+        for message in self.messages:
+            prompt += f"{message['role']}: {message['content']}\n"
+        prompt += "assistant:"
+        return prompt
 
     def _extract_text(self, resp):
         if isinstance(resp, dict):
@@ -101,6 +216,31 @@ class TaskAgent:
             if "response" in resp:
                 return resp.get("response") or ""
         return str(resp)
+
+    def _call_tool(self, tool_name, tool_args):
+        if tool_name == "new_task":
+            return new_task(
+                task=tool_args.get("task"),
+                context=tool_args.get("context"),
+                outputType=tool_args.get("outputType"),
+                agent_api=self.agent_api,
+            )
+        elif tool_name == "terminal_command":
+            return terminal_command(tool_args.get("command"))
+        elif tool_name == "web_search":
+            return web_search(tool_args.get("query"))
+        elif tool_name == "create_file":
+            return create_file(tool_args.get("file_path"), tool_args.get("content"))
+        elif tool_name == "create_test":
+            return create_test(tool_args.get("chunk"))
+        elif tool_name == "query_project_context":
+            return query_project_context(tool_args.get("query"))
+        elif tool_name == "edit_code_chunk":
+            return edit_code_chunk(tool_args.get("chunk"), tool_args.get("modification"))
+        elif tool_name == "return":
+            return tool_args.get("output")
+        else:
+            return f"Unknown tool: {tool_name}"
 
 
 #####################
@@ -140,26 +280,15 @@ def terminal_command(command):
     """
     if not isinstance(command, str):
         raise TypeError("command must be a string")
-    preview = f"Would run: {command}"
-    return summarize(preview, 200)
-
-
-def refactor_method(code: Chunk):
-    """
-    Logically refactors the chunk into smaller logical pieces
-    separating concerns into smaller, more readable methods or classes.
-    Calls edit_code_chunk on the chunk to replace the contents.
-    """
-    pass
-
-
-def refactor_file(file):
-    """
-    Logically splits the file into smaller, more manageable chunks.
-    creates new files for different chunks
-    calls create_file for any new files
-    """
-    pass
+    try:
+        import subprocess
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout
+        else:
+            return f"Error: {result.stderr}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 def create_test(chunk: Chunk):
@@ -169,30 +298,34 @@ def create_test(chunk: Chunk):
     return "def test_placeholder():\n    assert True"
 
 
-def create_file(file):
+def create_file(file_path, content):
     """
     creates a new file
     """
-    return f"Created file placeholder for: {file}"
+    try:
+        with open(file_path, "w") as f:
+            f.write(content)
+        return f"File created: {file_path}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
-def web_search(searchStr):
+def web_search(query):
     """
     Performs a web search using the DuckDuckGo api.
 
     Args:
-        searchStr (str, required): search string
+        query (str, required): search string
 
     Returns:
         a small list of clearly summarized, relevant results.
     """
-    if not isinstance(searchStr, str):
-        raise TypeError("searchStr must be a string")
+    if not isinstance(query, str):
+        raise TypeError("query must be a string")
     return [
-        {"title": "Result 1", "summary": summarize(searchStr, 60)},
-        {"title": "Result 2", "summary": summarize(searchStr, 60)},
+        {"title": "Result 1", "summary": summarize(query, 60)},
+        {"title": "Result 2", "summary": summarize(query, 60)},
     ]
-
 
 def query_project_context(query):
     """
@@ -213,47 +346,6 @@ def query_project_context(query):
     scored.sort(key=lambda x: x[0], reverse=True)
     return [d for _, d in scored[:5]]
 
-
-def validate_command(command):
-    """
-    Validates any terminal command
-    checks project_context.documentation
-    context = {"command": command}
-    return TaskAgent("Does this command conform to documentation?", context)
-    """
-    if not isinstance(command, str):
-        raise TypeError("command must be a string")
-    return True
-
-
-def validate_statement(command):
-    """
-    validates a line of code for legitimacy
-    checks project_context.documentation
-    context = {"command": command}
-    return TaskAgent("Does this command conform to documentation?", context)
-    """
-    if not isinstance(command, str):
-        raise TypeError("command must be a string")
-    return True
-
-
-def query_code_by_summary():
-    """
-    searches through code summary vector database by summary
-    returns most relevant code chunks
-    """
-    return []
-
-
-def query_code_by_text():
-    """
-    searches through code summary vector database by text
-    returns most relevant code chunks
-    """
-    return []
-
-
 def edit_code_chunk(chunk, modification):
     """
     take the chunk and replace it with the modified chunk
@@ -267,102 +359,6 @@ def edit_code_chunk(chunk, modification):
 #####################
 
 
-def add_file_to_context():
-    """
-    terminal based file picker with fuzzy matching and real-time keystroke updates.
-    If fuzzy match maps to a directory.
-
-    Minimal non-interactive implementation:
-    - Ensures the in-memory project context exists.
-    - Returns a list of relative file paths in the current working directory
-      filtered by a simple fuzzy substring match using the ADD_FILE_QUERY
-      environment variable. If no query is provided, returns all files.
-
-    Returns:
-        list[str]: matching relative file paths
-    """
-    import os
-
-    store = _GLOBAL_VECTOR_STORE
-    if store is None:
-        generate_project_context()
-        store = _GLOBAL_VECTOR_STORE
-
-    query = os.environ.get("ADD_FILE_QUERY", "").strip().lower()
-    results = []
-    for root, dirs, filenames in os.walk(os.getcwd()):
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
-        for name in filenames:
-            if name.startswith('.'):
-                continue
-            path = os.path.join(root, name)
-            rel = os.path.relpath(path, os.getcwd())
-            if not query:
-                results.append(rel)
-            else:
-                hay = rel.lower()
-                i = 0
-                for ch in query:
-                    pos = hay.find(ch, i)
-                    if pos == -1:
-                        i = -1
-                        break
-                    i = pos + 1
-                if i != -1:
-                    results.append(rel)
-    return sorted(results)
-
-
-def add_code_to_context():
-    """
-    Same as add_file_to_context but returns logical code chunks from selected files.
-    The current minimal implementation reuses the project context and slices file
-    contents into fixed-size line chunks that can be presented or filtered by callers.
-
-    Returns:
-        list[dict]: list of chunk dicts with keys: path, start, end, text
-    """
-    import os
-
-    store = _GLOBAL_VECTOR_STORE
-    if store is None:
-        generate_project_context()
-        store = _GLOBAL_VECTOR_STORE
-    files = []
-    for root, dirs, filenames in os.walk(os.getcwd()):
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
-        for name in filenames:
-            if name.startswith('.'):
-                continue
-            path = os.path.join(root, name)
-            try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except Exception:
-                continue
-            rel = os.path.relpath(path, os.getcwd())
-            files.append((rel, content))
-
-    chunks = []
-    max_lines = 60
-    for rel, content in files:
-        lines = content.splitlines()
-        if not lines:
-            continue
-        start = 0
-        while start < len(lines):
-            end = min(start + max_lines, len(lines))
-            chunk_text = "\n".join(lines[start:end])
-            chunks.append({
-                "path": rel,
-                "start": start + 1,
-                "end": end,
-                "text": chunk_text,
-            })
-            start = end
-    return chunks
-
-
 def summarize(obj, max_size):
     """
     summarize this object and return a string no longer than max size.
@@ -372,6 +368,7 @@ def summarize(obj, max_size):
     if len(text) <= max_size:
         return text
     return text[: max_size - 3] + "..."
+
 
 #####################
 # Context generation
@@ -421,7 +418,18 @@ def initialize_ollama_api():
     if not models:
         raise RuntimeError("No ollama models found. Use 'ollama pull <model>' to install one.")
 
-    selected = models[0]
+    print("Available models:")
+    for i, model in enumerate(models):
+        print(f"{i + 1}. {model}")
+
+    while True:
+        try:
+            selection = input("Select a model: ")
+            selected_model = models[int(selection) - 1]
+            break
+        except (ValueError, IndexError):
+            print("Invalid selection. Please try again.")
+
     client = getattr(ollama, "Client", None)
     if client is not None:
         try:
@@ -430,33 +438,9 @@ def initialize_ollama_api():
             raise RuntimeError(f"Failed to create ollama client: {e}")
     else:
         api = ollama
-    setattr(api, "model", selected)
+    setattr(api, "model", selected_model)
     return api
 
-
-def generate_contextual_summary():
-    """
-    recursively calls a summarizing_agent.
-    generates .all-hands/summary
-    """
-    pass
-
-
-def index_files_and_directories():
-    """
-    lists all files and directories.
-    Each line is given an embedding so that it may be searched later.
-    """
-    pass
-
-
-def create_code_chunk_embeddings():
-    """
-    splits files into chunks
-    creates summaries and embeddings for each chunk
-    stores summaries and embeddings in vector data base
-    """
-    pass
 
 # Simple in-memory vector store and utilities
 _GLOBAL_VECTOR_STORE = None
@@ -479,7 +463,6 @@ def _cosine_similarity(a: dict, b: dict) -> float:
     if na == 0 or nb == 0:
         return 0.0
     return dot / (na * nb)
-
 
 def generate_project_context():
     """
@@ -531,56 +514,40 @@ def generate_project_context():
     _GLOBAL_VECTOR_STORE = {"docs": docs}
     print("Project context generated for", len(files), "files")
     for d in docs[:5]:
-        print("-", d["id"])
+        print("- ", d["id"])
     return _GLOBAL_VECTOR_STORE
 
 
 def main_loop():
     """
-    Interactive loop outline:
-      - execute_task: TaskAgent(task)
-      - ask_question: TaskAgent(createTask(question))
-      - run_command:
-          af: add_file_to_context()
-          ac: add_code_to_context()
-          q: quit
+    Interactive loop for the TaskAgent.
     """
     generate_project_context()
     api = initialize_ollama_api()
+    messages = []
     while True:
         try:
-            user = input(":command or free-form task ('q' to quit): ").strip()
+            user_input = input("You: ").strip()
         except EOFError:
             break
-        if not user:
+        if not user_input:
             continue
-        if user.lower() in {"q", ":q", ":quit", ":exit", "quit", "exit"}:
+        if user_input.lower() in {"q", "quit", "exit"}:
             break
-        if user.startswith(":"):
-            cmd = user[1:].strip().lower()
-            if cmd in {"af"}:
-                results = add_file_to_context()
-                print("FILES:")
-                for p in results[:20]:
-                    print("-", p)
-                continue
-            if cmd in {"ac"}:
-                chunks = add_code_to_context()
-                print("CHUNKS:")
-                for c in chunks[:5]:
-                    print(f"- {c['path']}:{c['start']}-{c['end']}")
-                continue
-            if cmd in {"cmd", "run"}:
-                command = input("command: ")
-                print(summarize(f"Would run: {command}", 200))
-                continue
-            print("Unknown command")
+        if user_input.lower() == "switch model":
+            api = initialize_ollama_api()
+            messages = []
             continue
-        task = user
-        breakpoint()
-        agent = TaskAgent(task=task, context=None, agent_api=api, outputType="text")
+
+        messages.append({"role": "user", "content": user_input})
+
+        agent = TaskAgent(task=user_input, context=None, agent_api=api, outputType="text")
+        agent.messages = messages
         agent_response = agent.run()
-        print(f"ollama: {agent_response}")
+
+        if agent_response:
+            messages.append({"role": "assistant", "content": agent_response})
+            print(f"Agent: {agent_response}")
 
 
 if __name__ == "__main__":
